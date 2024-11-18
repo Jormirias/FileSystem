@@ -262,7 +262,8 @@ int fs_ls(char *dirname) {
 
 
 /** open file name;
- *  returns the inode number for named file (there are no file descriptors)
+*  openmode can be O_RD, O_WR or both (O_RD|O_WR)
+ *  returns the file descriptor for named file
  */
 int fs_open(char *name, int openmode) {
     if (check_rootSB() == -1) return -1;
@@ -281,10 +282,14 @@ int fs_close(int fd) {
 }
 
 
-/************************************************************/
+/** reads length bytes into data, starting at filedescriptor's offset
+ *  returns the efective number of bytes read (will be 0 at end of file)
+ *  returns -1 if error, like invalid fd
+ */
 int fs_read(int fd, char *data, int length) {
     if (check_rootSB() == -1) return -1;
     int bytes_read = 0;
+    // TODO
 
 
     return bytes_read;
