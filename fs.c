@@ -59,7 +59,7 @@
 
 // Super block with file system parameters
 struct fs_sblock {
-    uint32_t magic;     // when formated this field should have FS_MAGIC
+    uint32_t magic;     // when formated this field should have FS_MAGIC - This identifies the filesystem type
     uint32_t block_cnt; // number of blocks in disk
     uint16_t bmap_size; // number of blocks with free/use block bitmap
     uint16_t first_inodeblk; // first block with inodes
