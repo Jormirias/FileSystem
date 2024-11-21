@@ -246,16 +246,121 @@ int fs_mount(char *device, int size) {
 
 /*****************************************************/
 
+
+int print_ls(char *dirname, int ino_number) {
+    struct fs_inode loaded_inode;
+    struct fs_inode child_inode;
+
+    /** try to load specified inode by ino_number
+    */
+    if ( inode_load(ino_number, &loaded_inode) == -1) return -1;
+
+    /** if loaded, iterate its valid dirblocks and print its data
+    */
+    printf("listing dir %s (inode %d):\n", dirname, ino_number);
+    printf("ino:type bytes name\n");
+    for (int i = 0; i < DIRBLOCK_PER_INODE; i++) {
+        union fs_block dir_block;
+        if (loaded_inode.dir_block[i] == 0) break;
+        if (loaded_inode.dir_block[i] < disk_size() ) {
+            disk_read(loaded_inode.dir_block[i], dir_block.data);
+            for (int j = 0; j < DIRENTS_PER_BLOCK; j++) {
+                /** If a dirent refers to an empty inode, skip to the the next dirblock
+                */
+                struct fs_dirent *entry = &dir_block.dirent[j];
+                if (entry->d_ino == 0) break;
+                inode_load(entry->d_ino, &child_inode);
+                printf("%3d:%c%9d %s\n", entry->d_ino, child_inode.type == 8 ? 'F' : child_inode.type == 4 ? 'D' : '?', child_inode.size, entry->d_name );
+            }
+
+        }
+    }
+
+    return 0;
+}
+
 /** list the directory dirname
  */
 int fs_ls(char *dirname) {
     if ( check_rootSB() == -1) return -1;
 
-    // recommended formats
-    //  printf("listing dir %s (inode %d):\n", dirname, ino_number);
-    //  printf("ino:type bytes name\n");
-    //  printf("%3d:%c%9d %s\n", ... );
+    /** In case dirname refers to the root directory, we know its Inode Number
+     */
+    if (strcmp(dirname, "/") == 0) {
+        return print_ls(dirname, ROOTINO);
+    }
 
+    union fs_block s_block;
+
+    /** load SBLOCK data into rootSB variable
+     */
+    disk_read(SBLOCK, s_block.data);
+    rootSB = s_block.super;
+
+    /** loop through the number of inode blocks that exist, listed in the SBLOCK
+     */
+    for (int i = 0; i < rootSB.inode_blocks; i++) {
+        union fs_block inode_block;
+        disk_read(INODESTART + i, inode_block.data);
+        /** loop through each inode inside the current_block
+        */
+        for (int j = 0; j < INODES_PER_BLOCK; j++)
+            /** Check if inode is of a directory
+            */
+            if (inode_block.inode[j].type == IFDIR) {
+                /** Check all dir_blocks inside the inode that aren't empty
+                */
+                for (int k = 0; k < DIRBLOCK_PER_INODE; k++) {
+                    union fs_block dir_block;
+                    if (inode_block.inode[j].dir_block[k] == 0) break;
+                    /** Load dir block and get its dirents - if it's a block WITHIN disk size
+                    */
+                    if (inode_block.inode[j].dir_block[k] < disk_size() ) {
+                        disk_read(inode_block.inode[j].dir_block[k], dir_block.data);
+                        for (int l = 0; l < DIRENTS_PER_BLOCK; l++) {
+                            /** If a dirent refers to an empty inode, skip to the the next dirblock
+                            */
+                            struct fs_dirent *entry = &dir_block.dirent[l];
+                            if (entry->d_ino == 0) break;
+                            if (strcmp(dirname, entry->d_name) == 0) {
+                                return print_ls(dirname, entry->d_ino);
+                            }
+                        }
+                    }
+                }
+            }
+
+    }
+
+
+    //loads first inode (has infos on root dir) to iroot variable
+    /*if (inode_load(ROOTINO, &iroot) != 0) {
+        return -1;
+    }*/
+
+    /*
+    for (int i = ROOTINO; i<INODES_PER_BLOCK; i++) {
+        printf("inode %d", iroot.type);
+    }
+    */
+
+
+    //fazer parse de dirs
+    //ciclo for que corre of blocks dos inodes, à procura dentro de cada inode dos dir_block; verificar se são dirs
+        //Se forem dirs, ver se o nome dá match ao pedido. Se sim, fazer fetch do I-NUMBER!
+        //Usar I-number
+
+    //disk_read(SBLOCK, block.data);
+    //block.super.first_inodeblk;
+    //block.super.first_datablk;
+
+
+
+
+
+    //traverse the filesystem to locate the inode for dirname
+    //Read the data blocks pointed to by the directory inode
+    //Interpret these blocks as directory entries and list their contents
 
     return -1;
 }
