@@ -502,6 +502,11 @@ int fs_close(int fd) {
  */
 int fs_read(int fd, char *data, int length) {
     if (check_rootSB() == -1) return -1;
+       /** load SBLOCK data into rootSB variable
+     */
+    union fs_block s_block;
+    disk_read(SBLOCK, s_block.data);
+    rootSB = s_block.super;
 
     //Check if fd has a valid value
     if (fd < 0 || fd >= MAX_OPEN_FILES) return -1;
@@ -518,24 +523,33 @@ int fs_read(int fd, char *data, int length) {
     //struct fs_inode file_inode = open_files[fd].inode;
     int bytes_read = 0;
 
-    //Access data block
+    //Access direct data block
     int offset = open_files[fd].offset;
     int current_data_block_id = offset2block(&open_files[fd].inode, offset);
     int file_size = open_files[fd].inode.size;
-    //starting in current block indicated by offset, search through all dir_blocks for the data sequentially
-	for (int k = 0; k < DIRBLOCK_PER_INODE && bytes_read < length ; k++) {
-		//printf("dir block (first) %d ", open_files[fd].inode.dir_block[k]);
+    int max_blocks = DIRBLOCK_PER_INODE;
+    uint16_t *current_block_list = open_files[fd].inode.dir_block;
 
+    //accessing indirect blocks
+	int indirect_loaded = 0;
+
+    //starting in current block indicated by offset, search through all dir_blocks for the data sequentially; and then through indir_blocks
+	for (int k = 0; k <= max_blocks && bytes_read < length ; k++) {
+		//printf("dir block (first) %d ", open_files[fd].inode.dir_block[k]);
+		//printf(" loading block %d, in MODE %d ", k, indirect_loaded);
+        if(indirect_loaded == 1 && current_block_list[k] < rootSB.first_datablk) continue;
+		//if(indirect_loaded == 1) printf(" loading block %d, in MODE %d, SEEKING ID %d  ", current_block_list[k], indirect_loaded, current_data_block_id);
         //Start the loop in the offset block
-        if (current_data_block_id == open_files[fd].inode.dir_block[k] && open_files[fd].inode.dir_block[k] < disk_size()) {
+        if (current_data_block_id == current_block_list[k] && current_block_list[k] < disk_size() && k < max_blocks) {
 
 			union fs_block curr_data_block;
-        	disk_read(open_files[fd].inode.dir_block[k], curr_data_block.data);
+        	disk_read(current_block_list[k], curr_data_block.data);
             //determine offset in bytes INSIDE block
             int block_offset = offset % BLOCKSZ;
             //bytes to read can't be bigger than remaining bytes in block OR length
 			int bytes_to_read = MIN(BLOCKSZ - block_offset, length - bytes_read);
             bytes_to_read = MIN(bytes_to_read, file_size - offset);
+            //if(indirect_loaded == 1) printf(" BYTES TO READ %d  ", bytes_to_read);
 
             // copy into "data"
         	memcpy(data + bytes_read, curr_data_block.data + block_offset, bytes_to_read);
@@ -543,18 +557,36 @@ int fs_read(int fd, char *data, int length) {
         	offset += bytes_to_read;
 
 			current_data_block_id = offset2block(&open_files[fd].inode, offset);
+                        //printf(" BYTESS: %d \n", bytes_read);
+                        //printf(" LENGTH: %d \n", length);
           	//printf("DIRECT BLOCK :%d: ", current_data_block_id);
-          }
+        }
 
-//remember updating the open file with offset
+
+        if (k == DIRBLOCK_PER_INODE && open_files[fd].inode.indir_block > 0 && !indirect_loaded) {
+          //reset loop for indir_blocks
+
+            indirect_loaded = 1;
+            max_blocks = BLOCKSZ / sizeof(uint16_t);
+            k = -1;
+            union fs_block indir_block;
+            disk_read(open_files[fd].inode.indir_block, indir_block.data);
+			uint16_t *indir_pointers = (uint16_t *)indir_block.data;
+            memset(current_block_list, 0, DIRBLOCK_PER_INODE);
+
+            current_block_list = indir_pointers;
+
+//for (int i = 0; i < BLOCKSZ / sizeof(uint16_t); i++) {
+//    printf("%d ", current_block_list[i]);
+//}
+        }
+
     }
+    //printf(" BYTESS: %d \n", bytes_read);
+	//printf(" LENGTH: %d \n", length);
     //printf("INDIRECT BLOCK :%d: ", open_files[fd].inode.indir_block);
 
 	open_files[fd].offset = offset;
-
-
-
-
 
     return bytes_read;
 }
