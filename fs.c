@@ -54,6 +54,10 @@
 
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
+// Maximum of files open
+#define MAX_OPEN_FILES 512
+
+
 /*** FSO FileSystem in memory structures ***/
 
 
@@ -94,6 +98,20 @@ union fs_block {
 
 /**  Super block from mounted File System (Global Variable)**/
 struct fs_sblock rootSB;
+
+
+
+// Structure to represent an open file
+struct open_file {
+    struct fs_inode inode;
+    int in_use;         // 0 if slot is free, 1 if in use
+    int openmode;       // O_RD or O_WR
+    int offset;         // Current position in file
+};
+
+
+// Array to store open files
+static struct open_file open_files[MAX_OPEN_FILES];
 
 
 /*****************************************************/
@@ -246,6 +264,21 @@ int fs_mount(char *device, int size) {
 
 /*****************************************************/
 
+int name_validity(char *name) {
+
+	//A name should not be bigger than MAXFILENAME
+	if (strlen(name) > MAXFILENAME) return -1;
+
+	//A name should not be empty
+	if (strlen(name) == 0) return -1;
+
+	//A name should be in ASCII
+	for (int i = 0; i < strlen(name); i++) {
+		if (name[i] < 32 || name[i] > 126) return -1;
+	}
+
+	return 0;
+}
 
 int print_ls(char *dirname, int ino_number) {
     struct fs_inode loaded_inode;
@@ -261,16 +294,18 @@ int print_ls(char *dirname, int ino_number) {
     printf("ino:type bytes name\n");
     for (int i = 0; i < DIRBLOCK_PER_INODE; i++) {
         union fs_block dir_block;
-        if (loaded_inode.dir_block[i] == 0) break;
-        if (loaded_inode.dir_block[i] < disk_size() ) {
+        if (loaded_inode.dir_block[i] < disk_size() && loaded_inode.dir_block[i] > 0) {
             disk_read(loaded_inode.dir_block[i], dir_block.data);
             for (int j = 0; j < DIRENTS_PER_BLOCK; j++) {
                 /** If a dirent refers to an empty inode, skip to the the next dirblock
                 */
                 struct fs_dirent *entry = &dir_block.dirent[j];
-                if (entry->d_ino == 0) break;
-                inode_load(entry->d_ino, &child_inode);
-                printf("%3d:%c%9d %s\n", entry->d_ino, child_inode.type == 8 ? 'F' : child_inode.type == 4 ? 'D' : '?', child_inode.size, entry->d_name );
+                if (entry->d_ino != 0 && entry->d_ino < rootSB.inode_cnt && name_validity(entry->d_name) == 0) {
+                	inode_load(entry->d_ino, &child_inode);
+                        if (child_inode.type == IFDIR || child_inode.type == IFREG) {
+                			printf("%3d:%c%9d %s\n", entry->d_ino, child_inode.type == 8 ? 'F' : child_inode.type == 4 ? 'D' : '?', child_inode.size, entry->d_name );
+                        }
+				}
             }
 
         }
@@ -279,15 +314,26 @@ int print_ls(char *dirname, int ino_number) {
     return 0;
 }
 
-/** list the directory dirname
- */
-int fs_ls(char *dirname) {
-    if ( check_rootSB() == -1) return -1;
+//extract last dir from pathname
 
-    /** In case dirname refers to the root directory, we know its Inode Number
+char* name_extractor (char *dirname) {
+    if (dirname == NULL) return NULL;
+    char *base_name = dirname;
+
+    for (char *c = dirname; *c != '\0'; ++c) {
+        if (*c == '/') {
+            base_name = c+1;
+        }
+    }
+
+    return base_name;
+}
+
+int find_inode(char *dirname) {
+   /** In case dirname refers to the root directory, we know its Inode Number
      */
     if (strcmp(dirname, "/") == 0) {
-        return print_ls(dirname, ROOTINO);
+        return ROOTINO;
     }
 
     union fs_block s_block;
@@ -304,33 +350,50 @@ int fs_ls(char *dirname) {
         disk_read(INODESTART + i, inode_block.data);
         /** loop through each inode inside the current_block
         */
-        for (int j = 0; j < INODES_PER_BLOCK; j++)
-            /** Check if inode is of a directory
+        for (int j = 0; j < INODES_PER_BLOCK; j++) {
+            /** Check if inode is of a directory/file
             */
             if (inode_block.inode[j].type == IFDIR) {
                 /** Check all dir_blocks inside the inode that aren't empty
                 */
+				//printf("inode %d ", j);
                 for (int k = 0; k < DIRBLOCK_PER_INODE; k++) {
                     union fs_block dir_block;
-                    if (inode_block.inode[j].dir_block[k] == 0) break;
                     /** Load dir block and get its dirents - if it's a block WITHIN disk size
                     */
-                    if (inode_block.inode[j].dir_block[k] < disk_size() ) {
+                    if (inode_block.inode[j].dir_block[k] < disk_size() && inode_block.inode[j].dir_block[k] > 0) {
                         disk_read(inode_block.inode[j].dir_block[k], dir_block.data);
-                        for (int l = 0; l < DIRENTS_PER_BLOCK; l++) {
-                            /** If a dirent refers to an empty inode, skip to the the next dirblock
-                            */
-                            struct fs_dirent *entry = &dir_block.dirent[l];
-                            if (entry->d_ino == 0) break;
-                            if (strcmp(dirname, entry->d_name) == 0) {
-                                return print_ls(dirname, entry->d_ino);
-                            }
+						//printf("dir_block %d ", inode_block.inode[j].dir_block[k]);
+                        	for (int l = 0; l < DIRENTS_PER_BLOCK; l++) {
+                        	/** If a dirent refers to an empty inode, skip to the the next dirblock
+                        	*/
+                        	struct fs_dirent *entry = &dir_block.dirent[l];
+                        	if (entry->d_ino != 0 && entry->d_ino < rootSB.inode_cnt && name_validity(entry->d_name) == 0) {
+                                //printf("DIR NAME %s ", entry->d_name);
+                        		if (strcmp(name_extractor(dirname), entry->d_name) == 0) {
+                        		    return entry->d_ino;
+                            	}
+							}
                         }
                     }
                 }
             }
-
+		}
     }
+
+    return -1;
+}
+
+/** list the directory dirname
+ */
+int fs_ls(char *dirname) {
+    if ( check_rootSB() == -1) return -1;
+
+    int inode_number = find_inode(dirname);
+
+    if (inode_number == -1) return -1;
+
+    return print_ls(dirname, inode_number);
 
 
     //loads first inode (has infos on root dir) to iroot variable
@@ -373,8 +436,43 @@ int fs_ls(char *dirname) {
 int fs_open(char *name, int openmode) {
     if (check_rootSB() == -1) return -1;
 
+	//Check if open mode is valid entry
+	if ((openmode != O_RD) && (openmode != O_WR) && (openmode != (O_RD|O_WR))) {
+        return -1;
+    }
 
-    return -1;  // no space for more open files
+    //Assume file descriptor is invalid; Search for a free file descriptor in the open_files array
+    int fd = -1;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!open_files[i].in_use) {
+            fd = i;
+            break;
+        }
+    }
+	// If all the slots of the open_files array are filled, returns -1
+    if (fd == -1) {
+        return -1;  // No free slots available
+    }
+
+    int inode_number = find_inode(name);
+
+    if (inode_number == -1) return -1;
+
+    struct fs_inode file_inode;
+    if (inode_load(inode_number, &file_inode) < 0) {
+        return -1;
+    }
+
+    if (file_inode.type != IFREG) {
+        return -1;
+    }
+
+    open_files[fd].inode = file_inode;
+    open_files[fd].in_use = 1;
+    open_files[fd].openmode = openmode;
+    open_files[fd].offset = 0;
+    return fd;
+
 }
 
 
@@ -383,7 +481,18 @@ int fs_open(char *name, int openmode) {
  */
 int fs_close(int fd) {
 
-    return -1;
+  	//Check if fd has a valid value
+    if (fd < 0 || fd >= MAX_OPEN_FILES) return -1;
+
+	//if file descriptor [fd] is NOT in_use, return error
+  	if (open_files[fd].in_use == 0) return -1;
+
+    //Otherwise, free its space
+    //open_files[fd].inode = NULL;
+    open_files[fd].in_use = 0;
+    //open_files[fd].openmode = NULL;
+    open_files[fd].offset = 0;
+    return 0;
 }
 
 
@@ -393,8 +502,58 @@ int fs_close(int fd) {
  */
 int fs_read(int fd, char *data, int length) {
     if (check_rootSB() == -1) return -1;
+
+    //Check if fd has a valid value
+    if (fd < 0 || fd >= MAX_OPEN_FILES) return -1;
+
+	//if file descriptor [fd] is NOT in_use, return error
+  	if (open_files[fd].in_use == 0) return -1;
+
+    //check if READ permission is up for the file
+    if(!(open_files[fd].openmode & O_RD)) return -1;
+
+    //check if inode type is file
+ 	if (open_files[fd].inode.type != IFREG) return -1;
+
+    //struct fs_inode file_inode = open_files[fd].inode;
     int bytes_read = 0;
-    // TODO
+
+    //Access data block
+    int offset = open_files[fd].offset;
+    int current_data_block_id = offset2block(&open_files[fd].inode, offset);
+    int file_size = open_files[fd].inode.size;
+    //starting in current block indicated by offset, search through all dir_blocks for the data sequentially
+	for (int k = 0; k < DIRBLOCK_PER_INODE && bytes_read < length ; k++) {
+		//printf("dir block (first) %d ", open_files[fd].inode.dir_block[k]);
+
+        //Start the loop in the offset block
+        if (current_data_block_id == open_files[fd].inode.dir_block[k] && open_files[fd].inode.dir_block[k] < disk_size()) {
+
+			union fs_block curr_data_block;
+        	disk_read(open_files[fd].inode.dir_block[k], curr_data_block.data);
+            //determine offset in bytes INSIDE block
+            int block_offset = offset % BLOCKSZ;
+            //bytes to read can't be bigger than remaining bytes in block OR length
+			int bytes_to_read = MIN(BLOCKSZ - block_offset, length - bytes_read);
+            bytes_to_read = MIN(bytes_to_read, file_size - offset);
+
+            // copy into "data"
+        	memcpy(data + bytes_read, curr_data_block.data + block_offset, bytes_to_read);
+        	bytes_read += bytes_to_read;
+        	offset += bytes_to_read;
+
+			current_data_block_id = offset2block(&open_files[fd].inode, offset);
+          	//printf("DIRECT BLOCK :%d: ", current_data_block_id);
+          }
+
+//remember updating the open file with offset
+    }
+    //printf("INDIRECT BLOCK :%d: ", open_files[fd].inode.indir_block);
+
+	open_files[fd].offset = offset;
+
+
+
 
 
     return bytes_read;

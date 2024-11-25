@@ -1,0 +1,24 @@
+#ifndef FS_H
+#define FS_H
+
+void fs_debug();
+int  fs_format();
+int  fs_mount();
+int  fs_ls(char *dirname);
+
+int  fs_create( char *fsname, int mode );
+int  fs_mkdir( char *name );
+int  fs_openbak( char *fsname);
+
+int  fs_open( char *fsname, int openmode );
+#define O_RD 1
+#define O_WR 2
+int  fs_read( int fd, char *data, int length );
+
+
+int  fs_read( int inumber, char *data, int length );
+int  fs_readbak( int inumber, char *data, int length, int offset);
+
+int  fs_write( int inumber, char *data, int length, int offset );
+
+#endif
