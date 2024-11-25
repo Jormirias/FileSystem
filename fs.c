@@ -317,7 +317,7 @@ int print_ls(char *dirname, int ino_number) {
 //extract last dir from pathname
 
 char* name_extractor (char *dirname) {
-    if (dirname == NULL) return NULL;
+
     char *base_name = dirname;
 
     for (char *c = dirname; *c != '\0'; ++c) {
